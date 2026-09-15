@@ -2220,6 +2220,21 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 n_subgraphs++;
                 i_start = i + 1;
             }
+            if (i_start != cgraph->n_nodes) {
+                // A node that is a view of a leaf tensor hits the `continue` at the top of this loop BEFORE
+                // the `i + 1 == cgraph->n_nodes` test, so when such a node is last the trailing subgraph is
+                // never emitted and the assert below fires. A graph that writes into a cache and then views
+                // it back ends on exactly that shape. Emit the remainder here.
+                //
+                // This is reachable only in the case that currently aborts, so it cannot change the
+                // partitioning of any graph that already works.
+                for (size_t j = 0; j < n_backends; j++) {
+                    auto & bcj = backend_ctx->backend_configs[j];
+                    bcj.cgraphs[n_subgraphs].offset = i_start;
+                }
+                n_subgraphs++;
+                i_start = cgraph->n_nodes;
+            }
             GGML_ASSERT(i_start == cgraph->n_nodes);
         }
 
