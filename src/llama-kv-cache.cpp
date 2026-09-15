@@ -402,7 +402,10 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 
         uint32_t new_head = cells.size();
 
-        for (uint32_t i = 0; i < cells.size(); ++i) {
+        // cells at or beyond used_max_p1() are empty (pos == -1), and p0 is clamped to >= 0
+        // above, so pos_in() can never match them
+        const uint32_t n_scan = cells.used_max_p1();
+        for (uint32_t i = 0; i < n_scan; ++i) {
             if (!cells.pos_in(i, p0, p1)) {
                 continue;
             }
@@ -426,7 +429,9 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 
             uint32_t new_head = cells.size();
 
-            for (uint32_t i = 0; i < cells.size(); ++i) {
+            // see seq_rm: cells beyond used_max_p1() cannot match pos_in()
+            const uint32_t n_scan = cells.used_max_p1();
+            for (uint32_t i = 0; i < n_scan; ++i) {
                 if (!cells.pos_in(i, p0, p1)) {
                     continue;
                 }
@@ -478,7 +483,9 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
             p1 = std::numeric_limits<llama_pos>::max();
         }
 
-        for (uint32_t i = 0; i < cells.size(); ++i) {
+        // see seq_rm: cells beyond used_max_p1() cannot match pos_in()
+        const uint32_t n_scan = cells.used_max_p1();
+        for (uint32_t i = 0; i < n_scan; ++i) {
             if (!cells.pos_in(i, p0, p1)) {
                 continue;
             }
@@ -598,7 +605,9 @@ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, ll
         return;
     }
 
-    for (uint32_t i = 0; i < cells.size(); ++i) {
+    // see seq_rm: cells beyond used_max_p1() cannot match pos_in()
+    const uint32_t n_scan = cells.used_max_p1();
+    for (uint32_t i = 0; i < n_scan; ++i) {
         if (!cells.pos_in(i, p0, p1)) {
             continue;
         }
@@ -645,7 +654,9 @@ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, in
         return;
     }
 
-    for (uint32_t i = 0; i < cells.size(); ++i) {
+    // see seq_rm: cells beyond used_max_p1() cannot match pos_in()
+    const uint32_t n_scan = cells.used_max_p1();
+    for (uint32_t i = 0; i < n_scan; ++i) {
         if (!cells.pos_in(i, p0, p1)) {
             continue;
         }
