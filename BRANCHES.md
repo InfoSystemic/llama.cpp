@@ -21,7 +21,30 @@ are still present there. A full briefing — every claim with the file and line 
 with their sources, and the reviewer questions to expect — is in the serving tree at
 `fleet-0912-ctx/UPSTREAM-HANDOFF.md`.
 
-## Candidate, measured but not yet a branch: GET_ROWS is single-threaded
+## `getrows-parallel` — measured three times, now a branch
+
+Rebased on current upstream master. `ggml_get_n_tasks()` gives `GET_ROWS` `n_tasks = 1`, sharing a case with
+`SET_ROWS` whose comment cites GPU-offload launch cost — which does not apply to a CPU-only build — while
+`ggml_compute_forward_get_rows` already splits by rows in every type variant.
+
+| measurement | result |
+|---|---|
+| alone, 28,880 ctx | **+12.8%** (16.64 → 18.44), greedy output byte-identical |
+| combined with three other changes | **+25.2%** (16.20 → 20.29), byte-identical |
+| 190-ctx control (below threshold) | moves <1.2%, as designed |
+| acceptance / tokens-per-cycle | identical in every arm |
+
+The gain is a **1.80x** speedup on the gather, not the linear one a thread count implies: the access pattern
+is latency-bound, so threads add memory-level parallelism but each still stalls on its own random row.
+Diagnosed from 91 ns per gathered row — exactly one DRAM latency with no overlap — and 2.80 GB/s against a
+machine measured at 381 GB/s.
+
+**One open item.** A fourth arm at a 4096-row threshold failed to complete its long-context point once, with
+no error in the log, while a 256-row threshold (a strict superset of the ops it threads) ran clean. That has
+not been reproduced or explained, and the branch ships the 4096 threshold as the conservative default. Re-run
+before proposing it upstream.
+
+## Superseded note: GET_ROWS is single-threaded
 
 `ggml_get_n_tasks()` pins `GET_ROWS` and `SET_ROWS` to one thread:
 
