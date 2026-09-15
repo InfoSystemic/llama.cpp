@@ -5,11 +5,27 @@ aggregate measured. Models: Qwen3.8-Flash-Next, DeepSeek-V4.1-Flash, GLM-5.3-Fla
 
 Full methodology and the measurements behind these: https://github.com/InfoSystemic/duck-duck-llama
 
-## Ready to propose upstream
+## Upstream submission is gated on a human, by upstream's rules
+
+`ggml-org/llama.cpp` AGENTS.md lists under "Prohibited AI Usage (results in immediate PR closure)":
+AI-written PR descriptions, **commit messages**, or reviewer responses; and **automated commits or PR
+submissions** — "may result in contributor ban". CONTRIBUTING.md adds that undisclosed AI use "may result in
+your account being permanently banned from contributing".
+
+**Private forks are explicitly exempt**, so everything in this fork is fine as it stands. Only the hop to
+upstream is gated. The commit messages currently on these branches were drafted with AI assistance and must
+be rewritten by the submitting human, along with the PR description and the required AI-usage disclosure.
+
+`unary-ops-parallel` is rebased onto current upstream master and applies cleanly; the four lines it deletes
+are still present there. A full briefing — every claim with the file and line to verify it, the measurements
+with their sources, and the reviewer questions to expect — is in the serving tree at
+`fleet-0912-ctx/UPSTREAM-HANDOFF.md`.
+
+## Ready to propose upstream (pending the above)
 
 | branch | change | status |
 |---|---|---|
-| `unary-ops-parallel` | `ggml_get_n_tasks()` gives 17 of 22 unary ops `n_tasks = 1` while `GELU`/`SILU` in the same switch get `n_threads`. All 22 dispatch through the same `apply_unary_op`, which splits work with `get_thread_range`, so there is no implementation difference behind it — `SILU` is threaded and `SIGMOID` is not. A 4-line deletion. | **bit-exact**, measured +3.4% on Qwen3.8-Flash-Next and +2.1% on GLM-5.3-Flash, greedy output byte-identical |
+| `unary-ops-parallel` | `ggml_get_n_tasks()` gives 17 of 22 unary ops `n_tasks = 1` while `GELU`/`SILU` in the same switch get `n_threads`. All 17 are `unary_op<op_x>` in `unary-ops.cpp`, reaching `apply_unary_op`, which already splits work with `get_thread_range`. `XIELU` sits on that exact path (`unary_op_functor`) and *is* given `n_threads`, so the row split is proven there; the 17 differ from it only in this switch. A 4-line deletion. (`GELU` and `SILU` have their own implementations in `ops.cpp` and are not evidence about this path — an earlier draft of this note claimed all 22 shared one implementation, which is false.) | **bit-exact**, measured +3.4% on Qwen3.8-Flash-Next and +2.1% on GLM-5.3-Flash, greedy output byte-identical |
 | `kv-seq-bounded-scan` | `seq_rm`/`seq_cp`/`seq_add`/`seq_div` walk every cell, but each loop body tests `cells.pos_in()`, empty cells hold `pos == -1`, and all four callers clamp `p0 >= 0` — so nothing at or beyond `used_max_p1()` can match. Bounds the scans there. Net −4 lines. | **behaviour unchanged**; matters for speculative decode at long context, where every rejected draft token triggers `seq_rm` over a cache sized by the allocated context rather than the occupied part |
 
 Both are bit-exact and neither touches selection, so neither can have the failure mode below.
