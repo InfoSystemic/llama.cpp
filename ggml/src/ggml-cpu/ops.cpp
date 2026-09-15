@@ -8573,18 +8573,94 @@ static void ggml_compute_forward_top_k_f32(
 
     int32_t * tmp = (int32_t *) params->wdata + (ne00 + CACHE_LINE_SIZE_F32) * ith;
 
+    // Selection by histogram partitioning rather than a partial sort. std::partial_sort is O(n log k) with an
+    // indirect comparator; for sparse-attention indexers n is the context length, so the log factor and the
+    // cache-hostile comparisons are paid on every token. Bucketing the values, walking down to the bucket holding
+    // the k-th largest, and resolving only that bucket is O(n) with sequential access.
+    //
+    // The result is the same set of indices: everything above the boundary bucket is unambiguously selected, and
+    // the remaining slots are chosen from inside that bucket by value. Order within the result differs, which
+    // ggml_top_k does not define (see the swap below, and test_top_k which sorts before comparing).
+    constexpr int TOP_K_NBUCKETS = 1024;
+
     for (int64_t i = ith; i < nr; i += nth) {
         const float * src_data = (float *)((char *) src0->data + i*nb01);
 
-        for (int64_t j = 0; j < ne00; j++) {
-            tmp[j] = j;
-        }
-
-        std::partial_sort(tmp, tmp + top_k, tmp + ne00, cmp_top_k{src_data});
-
         int32_t * dst_data = (int32_t *)((char *) dst->data + i*nb1);
 
-        std::copy(tmp, tmp + top_k, dst_data);
+        // Scores may carry an attention mask, so -INFINITY is expected. Bounding the histogram with it would make
+        // (hi - lo) infinite, the bucket scale zero, and every bucket index NaN.
+        float lo =  INFINITY;
+        float hi = -INFINITY;
+        for (int64_t j = 0; j < ne00; j++) {
+            const float v = src_data[j];
+            if (std::isfinite(v)) {
+                lo = std::min(lo, v);
+                hi = std::max(hi, v);
+            }
+        }
+
+        if (top_k >= ne00 || !(hi > lo)) {
+            // everything qualifies, or every value is identical
+            for (int64_t j = 0; j < top_k; j++) {
+                dst_data[j] = (int32_t) (j < ne00 ? j : 0);
+            }
+        } else {
+            const float scale = TOP_K_NBUCKETS / (hi - lo);
+
+            int hist[TOP_K_NBUCKETS] = { 0 };
+            for (int64_t j = 0; j < ne00; j++) {
+                const float v = src_data[j];
+                int b = std::isfinite(v) ? (int) ((v - lo) * scale) : 0;
+                b = b < 0 ? 0 : (b >= TOP_K_NBUCKETS ? TOP_K_NBUCKETS - 1 : b);
+                hist[b]++;
+            }
+
+            int64_t acc = 0;
+            int      cut = TOP_K_NBUCKETS - 1;
+            for (; cut > 0; cut--) {
+                acc += hist[cut];
+                if (acc >= top_k) {
+                    break;
+                }
+            }
+
+            const float hi_edge = lo + (float) (cut + 1) / scale;
+            const float lo_edge = lo + (float)  cut      / scale;
+
+            int64_t pos = 0;
+            for (int64_t j = 0; j < ne00 && pos < top_k; j++) {
+                if (src_data[j] >= hi_edge) {
+                    dst_data[pos++] = (int32_t) j;
+                }
+            }
+
+            if (pos < top_k) {
+                // resolve the boundary bucket by value; it holds ~ne00/TOP_K_NBUCKETS entries
+                const int64_t need = top_k - pos;
+
+                int64_t m = 0;
+                for (int64_t j = 0; j < ne00; j++) {
+                    if (src_data[j] >= lo_edge && src_data[j] < hi_edge) {
+                        tmp[m++] = (int32_t) j;
+                    }
+                }
+                if (m > need) {
+                    std::nth_element(tmp, tmp + need - 1, tmp + m, cmp_top_k{src_data});
+                }
+                for (int64_t j = 0; j < need && j < m; j++) {
+                    dst_data[pos++] = tmp[j];
+                }
+            }
+
+            // Everything not already taken, so every destination slot is written even if the values are
+            // degenerate (all equal, NaN, or entirely masked) and the bucket walk under-counts.
+            for (int64_t j = 0; j < ne00 && pos < top_k; j++) {
+                if (!(src_data[j] >= lo_edge)) {
+                    dst_data[pos++] = (int32_t) j;
+                }
+            }
+        }
 
         // emphasize that the order is not important
         if (top_k > 1) {
