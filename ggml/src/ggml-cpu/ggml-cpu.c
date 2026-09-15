@@ -2360,6 +2360,14 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 n_tasks = n_threads;
             } break;
         case GGML_OP_GET_ROWS:
+            {
+                // ggml_compute_forward_get_rows splits by rows via get_thread_range() in every type
+                // variant, so threading here is safe and bit-exact. Keep small gathers single-task: below
+                // the threshold the barrier costs more than the copy saves, and they stay eligible for the
+                // single-task batching path.
+                const int64_t nr = ggml_nrows(node);
+                n_tasks = nr >= 4096 ? MIN(n_threads, (int) nr) : 1;
+            } break;
         case GGML_OP_SET_ROWS:
             {
                 // FIXME: get_rows can use additional threads, but the cost of launching additional threads
