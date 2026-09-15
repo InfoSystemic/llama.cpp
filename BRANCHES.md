@@ -21,6 +21,45 @@ are still present there. A full briefing — every claim with the file and line 
 with their sources, and the reviewer questions to expect — is in the serving tree at
 `fleet-0912-ctx/UPSTREAM-HANDOFF.md`.
 
+## Candidate, measured but not yet a branch: GET_ROWS is single-threaded
+
+`ggml_get_n_tasks()` pins `GET_ROWS` and `SET_ROWS` to one thread:
+
+```c
+        case GGML_OP_GET_ROWS:
+        case GGML_OP_SET_ROWS:
+            {
+                // FIXME: get_rows can use additional threads, but the cost of launching additional threads
+                // decreases performance with GPU offloading
+                n_tasks = 1;
+            } break;
+```
+
+The stated reason is GPU-offload launch cost, which does not apply to a CPU-only build, and
+`ggml_compute_forward_get_rows` **already splits by rows** (`dr = (nr + nth - 1)/nth`) in every type variant.
+Same defect shape as `unary-ops-parallel`: the kernel honours ith/nth, the scheduler refuses to supply them.
+
+Measured on Qwen3.8-Flash-Next, where a sparse-attention indexer gathers the whole key cache every token:
+`GET_ROWS` moves 8.2 MB per layer in 2.93 ms = **2.80 GB/s, 0.74% of this machine's 381 GB/s**, at **91 ns per
+gathered row** -- one DRAM latency with no memory-level parallelism.
+
+Threading it above a row threshold, four arms, greedy output byte-identical in all of them:
+
+| arm | 190 ctx | 28,880 ctx | acceptance | greedy hash |
+|---|---:|---:|---:|---|
+| production | 24.04 | 16.64 | 76% | `13b7ea22` |
+| patched lib, flag off | 24.06 | 16.28 | 76% | `13b7ea22` |
+| **threaded above 256 rows** | 24.33 | **18.44** | 76% | `13b7ea22` |
+
+**+12.0%** against the control mean on a 2.2% noise floor, bit-exact. The gain is a 1.80x speedup on the
+gather, not the 8-60x a naive thread-count argument predicts, because the gather is DRAM-latency bound and
+sixty threads each stalling on their own random 256-byte read do not recover that linearly.
+
+**Not yet a branch, deliberately.** A fourth arm at a 4096-row threshold never completed its long-context
+point (killed at 50 min against ~6 for the others, no error in the log), and a higher threshold behaving
+worse than both a lower threshold and no threading has no obvious mechanism. Until that is reproduced or
+dismissed, the threshold to propose is undetermined. Re-run queued.
+
 ## Ready to propose upstream (pending the above)
 
 | branch | change | status |
