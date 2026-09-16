@@ -1,5 +1,30 @@
 # Branches in this fork
 
+## Upstream-submission status, verified 2026-09-15
+
+All four candidates rebased onto upstream master `930e2fa59`, each defect re-confirmed still present on that
+commit, and **each branch built clean** against it (`ggml-base`, `ggml-cpu`, `llama`; unpatched master also
+built, so the environment is valid).
+
+| branch | file | defect confirmed on master | builds | measured |
+|---|---|---|---|---|
+| `unary-ops-parallel` | `ggml-cpu/ggml-cpu.c` | yes — 17 unary ops at `n_tasks = 1` | OK | +3.4% Qwen, +2.1% GLM, byte-identical |
+| `getrows-parallel` | `ggml-cpu/ggml-cpu.c` | yes — `GET_ROWS` at `n_tasks = 1` | OK | **+12.8%** alone, +25.2% combined, byte-identical |
+| `meta-trailing-subgraph` | `ggml-backend-meta.cpp` | yes — assert at line 2223, `continue` at 2185 | OK | unblocks a graph class that aborts at reserve |
+| `kv-seq-bounded-scan` | `src/llama-kv-cache.cpp` | yes | OK | behaviour unchanged; matters for speculative decode at long context |
+
+**Not for upstream:**
+- `topk-linear-selection` — refuted. Conformant to `test_top_k` and still 7-17% slower on a real model.
+- The top-k `-inf` mask fix — `argsort_top_k_enabled` **does not exist upstream**; there is nothing to fix there.
+- The pooled-key indexer cache — model-specific, and depends on `meta-trailing-subgraph` landing first.
+
+**What remains is not technical.** `ggml-org/llama.cpp` AGENTS.md prohibits AI-written commit messages and
+automated PR submission, with a stated risk of a contributor ban. The commit messages on these branches were
+drafted by an agent and **must be rewritten by the submitting human**, along with each PR description and the
+required AI-usage disclosure. See `fleet-0912-ctx/UPSTREAM-HANDOFF.md` for every claim tied to the file and
+line that supports it.
+
+
 Measured on a Lenovo SR950: 4x Xeon Gold 6242 (Cascade Lake, AVX-512 VNNI, no AMX), 755 GB DDR4, 381 GB/s
 aggregate measured. Models: Qwen3.8-Flash-Next, DeepSeek-V4.1-Flash, GLM-5.3-Flash.
 
